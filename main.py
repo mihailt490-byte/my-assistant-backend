@@ -8,7 +8,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 # === ВАЖНО: ВСТАВЬТЕ СЮДА ТОКЕН ВАШЕГО БОТА ===
-BOT_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER" 
+BOT_TOKEN = "9109464866:AAFBOp81sTq44ZAqvxAPx11LT7k2qIwhDog" 
 # ==============================================
 
 app = FastAPI()
