@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
 app = FastAPI()
 
@@ -17,14 +18,19 @@ def init_db():
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
         c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT)')
-        c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, title TEXT, status TEXT DEFAULT "todo")')
-        # Новая таблица для геолокаций
+        c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, title TEXT, status TEXT DEFAULT "todo", deadline TEXT)')
         c.execute('CREATE TABLE IF NOT EXISTS geo_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT, lat REAL, lng REAL)')
+        
+        # Безопасное добавление колонки дедлайнов для старых задач
+        try:
+            c.execute('ALTER TABLE tasks ADD COLUMN deadline TEXT')
+        except sqlite3.OperationalError:
+            pass # Если колонка уже есть, идем дальше
+            
         conn.commit()
 
 init_db()
 
-# --- Схемы данных ---
 class Item(BaseModel):
     user_id: str
     text: str
@@ -32,6 +38,7 @@ class Item(BaseModel):
 class TaskCreate(BaseModel):
     user_id: str
     title: str
+    deadline: Optional[str] = None
 
 class TaskStatus(BaseModel):
     status: str
@@ -42,7 +49,7 @@ class GeoNoteCreate(BaseModel):
     lat: float
     lng: float
 
-# --- 1. МОДУЛЬ ЗАМЕТОК ---
+# --- 1. ЗАМЕТКИ ---
 @app.get("/notes")
 def get_notes(user_id: str):
     with sqlite3.connect("database.db") as conn:
@@ -66,19 +73,19 @@ def delete_note(note_id: int):
         conn.commit()
     return {"status": "ok"}
 
-# --- 2. МОДУЛЬ ЗАДАЧ ---
+# --- 2. ЗАДАЧИ (С ДЕДЛАЙНАМИ) ---
 @app.get("/tasks")
 def get_tasks(user_id: str):
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
-        c.execute("SELECT id, title, status FROM tasks WHERE user_id=?", (user_id,))
-        return [{"id": row[0], "title": row[1], "status": row[2]} for row in c.fetchall()]
+        c.execute("SELECT id, title, status, deadline FROM tasks WHERE user_id=?", (user_id,))
+        return [{"id": row[0], "title": row[1], "status": row[2], "deadline": row[3]} for row in c.fetchall()]
 
 @app.post("/tasks")
 def add_task(task: TaskCreate):
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
-        c.execute("INSERT INTO tasks (user_id, title, status) VALUES (?, ?, 'todo')", (task.user_id, task.title))
+        c.execute("INSERT INTO tasks (user_id, title, status, deadline) VALUES (?, ?, 'todo', ?)", (task.user_id, task.title, task.deadline))
         conn.commit()
     return {"status": "ok"}
 
@@ -98,7 +105,7 @@ def delete_task(task_id: int):
         conn.commit()
     return {"status": "ok"}
 
-# --- 3. НОВЫЙ МОДУЛЬ ГЕО-ЗАМЕТОК ---
+# --- 3. ГЕО-ЗАМЕТКИ ---
 @app.get("/geo")
 def get_geo(user_id: str):
     with sqlite3.connect("database.db") as conn:
