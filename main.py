@@ -1,11 +1,10 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Разрешаем запросы из любых источников (чтобы Mini App мог стучаться на сервер)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,53 +13,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Функция создания базы данных, если её нет
 def init_db():
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            text TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        # Таблица для заметок
+        c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT)')
+        # Новая таблица для задач
+        c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, title TEXT, status TEXT DEFAULT "todo")')
+        conn.commit()
 
 init_db()
 
-# Структура данных для новой заметки
-class NoteCreate(BaseModel):
+# --- Схемы данных ---
+class Item(BaseModel):
     user_id: str
     text: str
 
-# 1. Получить все заметки конкретного пользователя по его Telegram ID
+class TaskCreate(BaseModel):
+    user_id: str
+    title: str
+
+class TaskStatus(BaseModel):
+    status: str
+
+# --- МОДУЛЬ ЗАМЕТОК ---
 @app.get("/notes")
 def get_notes(user_id: str):
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, text FROM notes WHERE user_id = ?", (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": row[0], "text": row[1]} for row in rows]
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, text FROM notes WHERE user_id=?", (user_id,))
+        return [{"id": row[0], "text": row[1]} for row in c.fetchall()]
 
-# 2. Добавить новую заметку
 @app.post("/notes")
-def add_note(note: NoteCreate):
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO notes (user_id, text) VALUES (?, ?)", (note.user_id, note.text))
-    conn.commit()
-    conn.close()
-    return {"status": "success"}
+def add_note(item: Item):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO notes (user_id, text) VALUES (?, ?)", (item.user_id, item.text))
+        conn.commit()
+    return {"status": "ok"}
 
-# 3. Удалить заметку по её ID
 @app.delete("/notes/{note_id}")
 def delete_note(note_id: int):
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-    conn.commit()
-    conn.close()
-    return {"status": "deleted"}
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM notes WHERE id=?", (note_id,))
+        conn.commit()
+    return {"status": "ok"}
+
+# --- НОВЫЙ МОДУЛЬ ЗАДАЧ ---
+@app.get("/tasks")
+def get_tasks(user_id: str):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, title, status FROM tasks WHERE user_id=?", (user_id,))
+        return [{"id": row[0], "title": row[1], "status": row[2]} for row in c.fetchall()]
+
+@app.post("/tasks")
+def add_task(task: TaskCreate):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO tasks (user_id, title, status) VALUES (?, ?, 'todo')", (task.user_id, task.title))
+        conn.commit()
+    return {"status": "ok"}
+
+@app.put("/tasks/{task_id}")
+def update_task_status(task_id: int, task_status: TaskStatus):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (task_status.status, task_id))
+        conn.commit()
+    return {"status": "ok"}
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        conn.commit()
+    return {"status": "ok"}
