@@ -3,6 +3,13 @@ from pydantic import BaseModel
 import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+import urllib.request
+import urllib.parse
+from datetime import datetime, timedelta
+
+# === ВАЖНО: ВСТАВЬТЕ СЮДА ТОКЕН ВАШЕГО БОТА ===
+BOT_TOKEN = "9109464866:AAFBOp81sTq44ZAqvxAPx11LT7k2qIwhDog" 
+# ==============================================
 
 app = FastAPI()
 
@@ -21,16 +28,63 @@ def init_db():
         c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, title TEXT, status TEXT DEFAULT "todo", deadline TEXT)')
         c.execute('CREATE TABLE IF NOT EXISTS geo_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT, lat REAL, lng REAL)')
         
-        # Безопасное добавление колонки дедлайнов для старых задач
+        # Добавляем колонки для дедлайнов и защиты от спама уведомлениями
         try:
             c.execute('ALTER TABLE tasks ADD COLUMN deadline TEXT')
-        except sqlite3.OperationalError:
-            pass # Если колонка уже есть, идем дальше
-            
+        except:
+            pass
+        try:
+            c.execute('ALTER TABLE tasks ADD COLUMN notified INTEGER DEFAULT 0')
+        except:
+            pass
         conn.commit()
 
 init_db()
 
+# --- СИСТЕМА ОТПРАВКИ УВЕДОМЛЕНИЙ ---
+def send_telegram_message(chat_id, text):
+    if BOT_TOKEN == "ВАШ_ТОКЕН_ОТ_BOTFATHER":
+        return # Защита от ошибок, если токен не заменили
+    
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = urllib.parse.urlencode({'chat_id': chat_id, 'text': text}).encode('utf-8')
+    try:
+        urllib.request.urlopen(url, data=data)
+    except Exception as e:
+        print("Ошибка отправки Telegram:", e)
+
+# --- СПЕЦИАЛЬНЫЙ РОУТ ДЛЯ ТАЙМЕРА (КРУГЛОСУТОЧНАЯ РАБОТА) ---
+@app.get("/cron")
+def check_deadlines():
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        # Ищем активные задачи с дедлайном, о которых еще не уведомляли
+        c.execute("SELECT id, user_id, title, deadline FROM tasks WHERE status='todo' AND deadline IS NOT NULL AND deadline != '' AND notified=0")
+        tasks = c.fetchall()
+
+        # Сервер Render живет по UTC, прибавляем 3 часа для времени Беларуси (МСК)
+        now = datetime.utcnow() + timedelta(hours=3)
+
+        for row in tasks:
+            task_id, user_id, title, deadline_str = row
+            try:
+                # Читаем время из базы
+                deadline_dt = datetime.fromisoformat(deadline_str)
+                diff = deadline_dt - now
+                
+                # Если до дедлайна осталось от 0 до 24 часов
+                if timedelta(hours=0) < diff <= timedelta(hours=24):
+                    msg = f"🔥 Внимание, дедлайн!\n\n📌 Задача: {title}\n⏰ Сдать до: {deadline_dt.strftime('%d.%m %H:%M')}"
+                    send_telegram_message(user_id, msg)
+                    
+                    # Отмечаем, что уведомление отправлено, чтобы не спамить
+                    c.execute("UPDATE tasks SET notified=1 WHERE id=?", (task_id,))
+            except Exception as e:
+                pass
+        conn.commit()
+    return {"status": "ok", "time": str(now)}
+
+# --- Схемы данных ---
 class Item(BaseModel):
     user_id: str
     text: str
@@ -73,7 +127,7 @@ def delete_note(note_id: int):
         conn.commit()
     return {"status": "ok"}
 
-# --- 2. ЗАДАЧИ (С ДЕДЛАЙНАМИ) ---
+# --- 2. ЗАДАЧИ ---
 @app.get("/tasks")
 def get_tasks(user_id: str):
     with sqlite3.connect("database.db") as conn:
@@ -85,7 +139,7 @@ def get_tasks(user_id: str):
 def add_task(task: TaskCreate):
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
-        c.execute("INSERT INTO tasks (user_id, title, status, deadline) VALUES (?, ?, 'todo', ?)", (task.user_id, task.title, task.deadline))
+        c.execute("INSERT INTO tasks (user_id, title, status, deadline, notified) VALUES (?, ?, 'todo', ?, 0)", (task.user_id, task.title, task.deadline))
         conn.commit()
     return {"status": "ok"}
 
