@@ -16,10 +16,10 @@ app.add_middleware(
 def init_db():
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
-        # Таблица для заметок
         c.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT)')
-        # Новая таблица для задач
         c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, title TEXT, status TEXT DEFAULT "todo")')
+        # Новая таблица для геолокаций
+        c.execute('CREATE TABLE IF NOT EXISTS geo_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT, lat REAL, lng REAL)')
         conn.commit()
 
 init_db()
@@ -36,7 +36,13 @@ class TaskCreate(BaseModel):
 class TaskStatus(BaseModel):
     status: str
 
-# --- МОДУЛЬ ЗАМЕТОК ---
+class GeoNoteCreate(BaseModel):
+    user_id: str
+    text: str
+    lat: float
+    lng: float
+
+# --- 1. МОДУЛЬ ЗАМЕТОК ---
 @app.get("/notes")
 def get_notes(user_id: str):
     with sqlite3.connect("database.db") as conn:
@@ -60,7 +66,7 @@ def delete_note(note_id: int):
         conn.commit()
     return {"status": "ok"}
 
-# --- НОВЫЙ МОДУЛЬ ЗАДАЧ ---
+# --- 2. МОДУЛЬ ЗАДАЧ ---
 @app.get("/tasks")
 def get_tasks(user_id: str):
     with sqlite3.connect("database.db") as conn:
@@ -89,5 +95,29 @@ def delete_task(task_id: int):
     with sqlite3.connect("database.db") as conn:
         c = conn.cursor()
         c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        conn.commit()
+    return {"status": "ok"}
+
+# --- 3. НОВЫЙ МОДУЛЬ ГЕО-ЗАМЕТОК ---
+@app.get("/geo")
+def get_geo(user_id: str):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, text, lat, lng FROM geo_notes WHERE user_id=?", (user_id,))
+        return [{"id": row[0], "text": row[1], "lat": row[2], "lng": row[3]} for row in c.fetchall()]
+
+@app.post("/geo")
+def add_geo(item: GeoNoteCreate):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO geo_notes (user_id, text, lat, lng) VALUES (?, ?, ?, ?)", (item.user_id, item.text, item.lat, item.lng))
+        conn.commit()
+    return {"status": "ok"}
+
+@app.delete("/geo/{geo_id}")
+def delete_geo(geo_id: int):
+    with sqlite3.connect("database.db") as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM geo_notes WHERE id=?", (geo_id,))
         conn.commit()
     return {"status": "ok"}
